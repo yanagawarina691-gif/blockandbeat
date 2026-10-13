@@ -336,7 +336,7 @@ function triggerBlockSuccess(blockCount = 1): void {
 function renderLobby(): string {
   return `
     <section class="panel lobby-panel">
-      <div class="brand">ShoutBeat</div>
+      <div class="brand">Block & Beat</div>
       <div class="subtitle">像素元素体感对战</div>
       ${renderBlockGuide()}
       <button class="primary" data-action="tutorial">新手教程</button>

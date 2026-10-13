@@ -1,5 +1,5 @@
 {
-  "name": "shoutbeat",
+  "name": "blockandbeat",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,8 @@
     "dev": "vite",
     "server": "node server/server.mjs",
     "build": "tsc && vite build",
-    "test": "vitest run"
+    "test": "vitest run && npm run test:server",
+    "test:server": "node --test server/*.integration.mjs"
   },
   "dependencies": {
     "phaser": "^3.90.0",
