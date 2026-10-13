@@ -39,6 +39,10 @@ function attach(ws, room, playerId) {
 }
 
 function handleCreate(ws) {
+  if (ws.roomCode) {
+    send(ws, { type: "error", message: "已在房间中，请断开后再创建房间" });
+    return;
+  }
   const code = makeCode();
   const room = {
     code,
@@ -52,12 +56,16 @@ function handleCreate(ws) {
 }
 
 function handleJoin(ws, roomCode) {
+  if (ws.roomCode) {
+    send(ws, { type: "error", message: "已在房间中，请断开后再加入房间" });
+    return;
+  }
   const room = rooms.get(String(roomCode || "").toUpperCase());
   if (!room) {
     send(ws, { type: "error", message: "房间不存在" });
     return;
   }
-  if (room.clients.size >= 2 && !room.clients.has("p2")) {
+  if (room.clients.size >= 2) {
     send(ws, { type: "error", message: "房间已满" });
     return;
   }
@@ -70,10 +78,10 @@ function handleJoin(ws, roomCode) {
 function handleReady(ws, ready) {
   const room = rooms.get(ws.roomCode);
   const client = room?.clients.get(ws.playerId);
-  if (!room || !client) return;
+  if (!room || !client || client.ws !== ws) return;
   client.ready = Boolean(ready);
   broadcast(room, roomState(room));
-  if (room.clients.size === 2 && [...room.clients.values()].every((player) => player.ready)) {
+  if (!room.started && room.clients.size === 2 && [...room.clients.values()].every((player) => player.ready)) {
     room.started = true;
     broadcast(room, { type: "matchStart", startsAt: Date.now() + 1800, seed: Math.floor(Math.random() * 1_000_000) });
   }
@@ -81,7 +89,7 @@ function handleReady(ws, ready) {
 
 function handleCast(ws, spellId, clientCastAt) {
   const room = rooms.get(ws.roomCode);
-  if (!room || !room.clients.has(ws.playerId) || !spellIds.has(spellId)) return;
+  if (!room || room.clients.get(ws.playerId)?.ws !== ws || !room.started || !spellIds.has(spellId)) return;
   broadcast(room, {
     type: "spellCast",
     playerId: ws.playerId,
@@ -94,8 +102,8 @@ function handleCast(ws, spellId, clientCastAt) {
 function handleRematch(ws) {
   const room = rooms.get(ws.roomCode);
   const client = room?.clients.get(ws.playerId);
-  if (!room || !client) return;
-  client.ready = false;
+  if (!room || !client || client.ws !== ws) return;
+  for (const player of room.clients.values()) player.ready = false;
   room.started = false;
   broadcast(room, { type: "rematch" });
   broadcast(room, roomState(room));
@@ -113,6 +121,11 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      send(ws, { type: "error", message: "消息必须为 JSON 对象" });
+      return;
+    }
+
     if (message.type === "createRoom") handleCreate(ws);
     if (message.type === "joinRoom") handleJoin(ws, message.roomCode);
     if (message.type === "ready") handleReady(ws, message.ready);
@@ -122,12 +135,16 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     const room = rooms.get(ws.roomCode);
-    if (!room) return;
+    if (!room || room.clients.get(ws.playerId)?.ws !== ws) return;
     room.clients.delete(ws.playerId);
+    room.started = false;
+    for (const player of room.clients.values()) player.ready = false;
     broadcast(room, { type: "playerDisconnected", playerId: ws.playerId });
     if (room.clients.size === 0) rooms.delete(room.code);
     else broadcast(room, roomState(room));
   });
 });
 
-console.log(`ShoutBeat realtime server listening on ws://localhost:${port}`);
+wss.on("listening", () => {
+  console.log(`Block & Beat realtime server listening on ws://localhost:${wss.address().port}`);
+});

@@ -83,5 +83,5 @@ function defaultWsUrl(): string {
   const configured = import.meta.env.VITE_WS_URL as string | undefined;
   if (configured) return configured;
   const protocol = location.protocol === "https:" ? "wss" : "ws";
-  return `${protocol}://${location.hostname}:8787`;
+  return `${protocol}://${location.host}/ws`;
 }
