@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "node server/server.mjs",
+    "server": "npm run build:server && node server/server.mjs",
     "build": "tsc && vite build",
     "test": "vitest run && npm run test:server",
-    "test:server": "node --test server/*.integration.mjs"
+    "test:server": "node --test server/*.integration.mjs",
+    "build:server": "tsc -p tsconfig.server.json",
+    "pretest:server": "npm run build:server"
   },
   "dependencies": {
     "phaser": "^3.90.0",

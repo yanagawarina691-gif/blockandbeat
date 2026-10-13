@@ -1,4 +1,4 @@
-import type { ElementType, SpellDefinition, SpellId } from "./types";
+import type { ElementType, SpellDefinition, SpellId } from "./types.js";
 
 export const SPELLS: Record<SpellId, SpellDefinition> = {
   fireball: {

@@ -11,7 +11,6 @@ import {
   AI_BLOCK_SUCCESS_RATE,
   castCooldownProgress,
   castRandomSpell,
-  castSpell,
   createMatchState,
   hasBlockableProjectile,
   hasLiveProjectiles,
@@ -32,8 +31,10 @@ const uiRoot: HTMLDivElement = foundUiRoot;
 const state = createMatchState(Date.now());
 const client = new MatchClient();
 const swing = new SwingBlockController();
-const onlineAvailable =
-  Boolean(import.meta.env.VITE_WS_URL) || ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
+const onlineAvailable = import.meta.env.VITE_ONLINE_ENABLED !== "false" && (
+  Boolean(import.meta.env.VITE_WS_URL) || import.meta.env.VITE_ONLINE_ENABLED === "true" ||
+  ["localhost", "127.0.0.1", "[::1]", "::1"].includes(location.hostname)
+);
 
 type PlayMode = "online" | "ai" | "tutorial";
 
@@ -86,7 +87,7 @@ function syncBattleSfx(): void {
   syncBgm(state.status);
 
   if (state.status === "countdown") {
-    const sec = Math.max(1, Math.ceil((state.countdownEndsAtMs - Date.now()) / 1000));
+    const sec = Math.max(1, Math.ceil((state.countdownEndsAtMs - state.nowMs) / 1000));
     if (sec !== lastCountdownSecond) {
       lastCountdownSecond = sec;
       playSfx("countdown");
@@ -130,10 +131,17 @@ new Phaser.Game({
 
 client.onStatus((status) => {
   networkStatus = status;
+  if (status === "已断开" && playMode === "online" && roomCode) {
+    returnHome();
+    errorText = "连接已断开，请重新加入房间";
+  }
   render();
 });
 
 client.onMessage((message) => {
+  if (playMode !== "online") return;
+  if (message.type === "matchSnapshot") Object.assign(state, message.state);
+  if (message.type === "blockResult") handleBlockResult(message);
   if (message.type === "roomCreated" || message.type === "roomJoined") {
     roomCode = message.roomCode;
     localPlayerId = message.playerId;
@@ -147,11 +155,10 @@ client.onMessage((message) => {
     }
   }
   if (message.type === "matchStart") {
-    startCountdown(state, message.startsAt);
+    resetSfxTrackers();
     errorText = "";
   }
   if (message.type === "spellCast") {
-    castSpell(state, message.playerId, message.spellId, Date.now());
     playSfx(message.playerId === localPlayerId ? "cast" : "castEnemy");
   }
   if (message.type === "playerDisconnected") {
@@ -177,17 +184,21 @@ swing.onStatus((status) => {
   }
 });
 
-swing.onSwing(() => {
-  if (state.status !== "running") return;
-  const result = tryBlock(state, localPlayerId, Date.now());
+function handleBlockResult(result: ReturnType<typeof tryBlock>): void {
   if (result.blocked) {
     inputStatus = `格挡成功：${result.spellName}`;
     if (playMode === "tutorial" && tutorialStep === 2) tutorialBlockDone = true;
     triggerBlockSuccess(result.blockCount ?? 1);
-    return;
+  } else {
+    inputStatus = result.reason ?? "挥动未格挡";
+    render(true);
   }
-  inputStatus = result.reason ?? "挥动未格挡";
-  render(true);
+}
+
+swing.onSwing(() => {
+  if (state.status !== "running") return;
+  if (playMode === "online") client.block();
+  else handleBlockResult(tryBlock(state, localPlayerId, Date.now()));
 });
 
 render(true);
@@ -205,7 +216,7 @@ window.addEventListener("keydown", (event) => {
 function loop(now: number): void {
   const dt = Math.min(50, now - lastFrame);
   lastFrame = now;
-  tickMatch(state, dt, Date.now());
+  if (playMode !== "online") tickMatch(state, dt, Date.now());
   syncBattleSfx();
   syncSwingWithMatch();
   if (Date.now() < blockFlashUntil && now - lastRender > 60) {
@@ -232,8 +243,8 @@ function render(force = false): void {
   renderKey = nextRenderKey;
 
   const focusedInput = document.activeElement instanceof HTMLInputElement ? document.activeElement : null;
-  const activeInputValue = focusedInput?.dataset.roomInput !== undefined ? focusedInput.value : "";
-  const shouldRestoreRoomInput = Boolean(focusedInput?.dataset.roomInput);
+  const activeInputValue = uiRoot.querySelector<HTMLInputElement>("[data-room-input]")?.value ?? "";
+  const shouldRestoreRoomInput = focusedInput?.dataset.roomInput !== undefined;
   const connected = Boolean(roomCode) || playMode !== "online";
   uiRoot.innerHTML = `
     <div class="hud ${state.status}">
@@ -260,9 +271,12 @@ function render(force = false): void {
       render(true);
       return;
     }
-    ensureOnlineConnection();
     const input = uiRoot.querySelector<HTMLInputElement>("[data-room-input]");
-    if (input?.value) client.joinRoom(input.value);
+    const code = input?.value;
+    if (code) {
+      ensureOnlineConnection();
+      client.joinRoom(code);
+    }
   });
   uiRoot.querySelector<HTMLButtonElement>("[data-action='ai']")?.addEventListener("click", () => {
     warmUpFeedback();
@@ -302,12 +316,10 @@ function render(force = false): void {
     castLocalPlayerSpell();
   });
 
-  if (shouldRestoreRoomInput) {
-    const input = uiRoot.querySelector<HTMLInputElement>("[data-room-input]");
-    if (input) {
-      input.value = activeInputValue;
-      input.focus();
-    }
+  const input = uiRoot.querySelector<HTMLInputElement>("[data-room-input]");
+  if (input) {
+    input.value = activeInputValue;
+    if (shouldRestoreRoomInput) input.focus();
   }
 }
 
@@ -361,7 +373,7 @@ function renderRoomPanel(match: MatchState, playerId: PlayerId): string {
     `;
   }
   if (match.status === "countdown") {
-    const left = Math.max(1, Math.ceil((match.countdownEndsAtMs - Date.now()) / 1000));
+    const left = Math.max(1, Math.ceil((match.countdownEndsAtMs - match.nowMs) / 1000));
     return `<section class="countdown">${left}</section>`;
   }
 
@@ -474,12 +486,14 @@ function formatTime(ms: number): string {
 function startLocalMatch(mode: Exclude<PlayMode, "online">): void {
   playMode = mode;
   roomCode = "";
+  client.disconnect();
   localPlayerId = "p1";
   resetBattle(state, Date.now());
   state.players.p1.connected = true;
   state.players.p2.connected = true;
   state.players.p1.ready = true;
   state.players.p2.ready = true;
+  aiBlockAttemptAt = 0;
   aiNextCastAt = Date.now() + 1200 + nextAttackDelay();
   tutorialStep = mode === "tutorial" ? 1 : 0;
   tutorialHint = mode === "tutorial" ? "教程：点「施法」发出随机元素技能" : "";
@@ -494,10 +508,10 @@ function startLocalMatch(mode: Exclude<PlayMode, "online">): void {
 function returnHome(): void {
   playMode = "online";
   roomCode = "";
+  client.disconnect();
+  localPlayerId = "p1";
   swing.stop();
-  resetBattle(state, Date.now());
-  state.players.p1.connected = false;
-  state.players.p2.connected = false;
+  Object.assign(state, createMatchState(Date.now()));
   tutorialHint = "";
   errorText = "";
   blockFlashUntil = 0;
@@ -633,6 +647,7 @@ function makeRenderKey(): string {
   return [
     playMode,
     state.status,
+    Math.ceil((state.countdownEndsAtMs - state.nowMs) / 1000),
     roomCode,
     networkStatus,
     inputStatus,
