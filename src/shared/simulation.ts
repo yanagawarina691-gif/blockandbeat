@@ -1,5 +1,5 @@
-import { pickRandomSpellId, SPELLS } from "./spells";
-import type { MatchState, PlayerId, ProjectileState, SpellId } from "./types";
+import { pickRandomSpellId, SPELLS } from "./spells.js";
+import type { MatchState, PlayerId, ProjectileState, SpellId } from "./types.js";
 
 export const WORLD_WIDTH = 360;
 export const WORLD_HEIGHT = 640;
@@ -54,6 +54,7 @@ export function startCountdown(state: MatchState, startsAtMs: number): void {
 }
 
 export function resetBattle(state: MatchState, nowMs: number): void {
+  state.status = "lobby";
   state.players.p1.health = 100;
   state.players.p2.health = 100;
   state.players.p1.hits = 0;
@@ -133,6 +134,7 @@ function reflectProjectile(
 ): void {
   const zone = BLOCK_ZONE[defenderId];
   projectile.direction = projectile.direction === 1 ? -1 : 1;
+  projectile.ownerId = defenderId;
   projectile.blockCount += 1;
   projectile.speed = Math.min(
     MAX_PROJECTILE_SPEED,

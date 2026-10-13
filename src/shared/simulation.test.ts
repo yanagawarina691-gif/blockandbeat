@@ -3,6 +3,7 @@ import {
   castRandomSpell,
   castSpell,
   createMatchState,
+  resetBattle,
   hasLiveProjectiles,
   startCountdown,
   tickMatch,
@@ -36,6 +37,15 @@ function makeProjectile(partial: Partial<ProjectileState> & Pick<ProjectileState
 }
 
 describe("element duel simulation", () => {
+  it("resets a completed match to the lobby without losing room membership", () => {
+    const state = runningState();
+    state.status = "finished";
+    state.winnerId = "p1";
+    resetBattle(state, 5000);
+    expect(state.status).toBe("lobby");
+    expect(state.winnerId).toBeNull();
+    expect(state.players.p1.connected).toBe(true);
+  });
   it("cancels any colliding enemy projectiles", () => {
     const state = runningState();
     expect(castSpell(state, "p1", "waterball", 1_050)).toBe(true);
@@ -82,6 +92,7 @@ describe("element duel simulation", () => {
     expect(incoming.alive).toBe(true);
     expect(incoming.direction).toBe(1);
     expect(incoming.blockCount).toBe(1);
+    expect(incoming.ownerId).toBe("p1");
     expect(incoming.speed).toBeGreaterThan(284);
     expect(state.impacts.some((impact) => impact.label === "格挡！")).toBe(true);
   });

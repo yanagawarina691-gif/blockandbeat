@@ -5,17 +5,17 @@ import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
 
-async function receive(client, type) {
+async function receive(client, type, predicate = () => true) {
   const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {
-    const index = client.messages.findIndex(message => message.type === type);
+    const index = client.messages.findIndex(message => message.type === type && predicate(message));
     if (index !== -1) return client.messages.splice(index, 1)[0];
     await delay(10);
   }
   throw new Error(`timed out waiting for ${type}`);
 }
 
-test('two-player rooms reject replacement, recover empty slots and survive malformed messages', { timeout: 15000 }, async (t) => {
+test('two-player rooms reject replacement, recover empty slots and survive malformed messages', { timeout: 30000 }, async (t) => {
   const child = spawn(process.execPath, ['server/server.mjs'], {
     cwd: new URL('..', import.meta.url),
     env: { ...process.env, PORT: '0' },
@@ -71,8 +71,30 @@ test('two-player rooms reject replacement, recover empty slots and survive malfo
   send(guest, { type: 'ready', ready: true });
   await receive(host, 'matchStart');
   await receive(guest, 'matchStart');
+  await receive(host, 'matchSnapshot', m => m.state.status === 'running');
   send(guest, { type: 'castSpell', spellId: 'fireball' });
   assert.equal((await receive(host, 'spellCast')).playerId, 'p2');
+  await receive(host, 'matchSnapshot', m => m.state.projectiles.some(p => p.direction === -1 && p.x <= 100 && p.x > 56));
+  send(host, { type: 'block' });
+  assert.equal((await receive(host, 'blockResult')).blocked, true);
+  const reflected = await receive(host, 'matchSnapshot', m => m.state.projectiles.some(p => p.blockCount === 1));
+  const remoteReflected = await receive(guest, 'matchSnapshot', m => m.state.nowMs === reflected.state.nowMs && m.state.projectiles.some(p => p.blockCount === 1));
+  assert.deepEqual(remoteReflected.state, reflected.state);
+  assert.equal(reflected.state.projectiles[0].ownerId, 'p1');
+  await receive(host, 'matchSnapshot', m => m.state.players.p2.health === 88);
+
+  // The server ignores forged state and enforces cooldowns itself.
+  send(guest, { type: 'matchSnapshot', state: { winnerId: 'p2' } });
+  for (let hit = 0; hit < 8; hit++) {
+    await receive(host, 'matchSnapshot', m => m.state.status === 'running' && m.state.castReadyAt.p1 <= m.state.nowMs && m.state.projectiles.length === 0);
+    for (let spam = 0; spam < 3; spam++) send(host, { type: 'castSpell', spellId: 'fireball' });
+    await receive(host, 'matchSnapshot', m => m.state.players.p2.health <= Math.max(0, 88 - (hit + 1) * 12));
+    host.messages = host.messages.filter(m => m.type !== 'matchSnapshot');
+  }
+  const finished = await receive(guest, 'matchSnapshot', m => m.state.status === 'finished');
+  assert.equal(finished.state.winnerId, 'p1');
+  assert.equal(finished.state.players.p1.health, 100);
+  assert.equal(finished.state.players.p1.hits, 9);
 
   for (const message of [null, [], 42, 'bad']) {
     send(guest, message);
@@ -84,10 +106,14 @@ test('two-player rooms reject replacement, recover empty slots and survive malfo
   await receive(host, 'rematch');
   await receive(guest, 'rematch');
 
-  const guestClosed = once(guest.ws, 'close');
-  guest.ws.close();
-  await guestClosed;
+  send(guest, { type: 'leaveRoom' });
+  await receive(guest, 'roomLeft');
   await receive(host, 'playerDisconnected');
+  // The same socket can create another room immediately after leaving.
+  send(guest, { type: 'createRoom' });
+  await receive(guest, 'roomCreated');
+  send(guest, { type: 'leaveRoom' });
+  await receive(guest, 'roomLeft');
   const replacement = await connect();
   send(replacement, { type: 'joinRoom', roomCode });
   assert.equal((await receive(replacement, 'roomJoined')).playerId, 'p2');

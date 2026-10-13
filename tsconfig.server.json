@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "rootDir": "src/shared",
+    "outDir": ".server-build"
+  },
+  "include": [
+    "src/shared/simulation.ts",
+    "src/shared/spells.ts",
+    "src/shared/types.ts"
+  ]
+}
